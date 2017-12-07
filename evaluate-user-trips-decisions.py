@@ -231,12 +231,12 @@ if __name__ == "__main__":
 	results_folderpath = sys.argv[6]
 
 #Print Args
-print "initial-date:", initial_date
-print "final-date:", final_date
-print "od-matrix-folderpath:", od_matrix_folderpath
-print "buste-data-folderpath:", buste_data_folderpath
-print "otp-server-url:", otp_server_url
-print "results-folderpath:", results_folderpath
+#print "initial-date:", initial_date
+#print "final-date:", final_date
+#print "od-matrix-folderpath:", od_matrix_folderpath
+#print "buste-data-folderpath:", buste_data_folderpath
+#print "otp-server-url:", otp_server_url
+#print "results-folderpath:", results_folderpath
 
 
 #Get Spark Session
@@ -268,7 +268,7 @@ otp_suggestions = get_otp_suggested_trips(od_matrix,otp_server_url)
 print "Extracting OTP Legs info..."
 otp_legs_df = prepare_otp_legs_df(extract_otp_trips_legs(otp_suggestions))
 get_df_stats(otp_legs_df,otp_legs_df.filter('mode == \'BUS\''),'Num OTP Legs','Num OTP Bus Legs')
-otp_legs_df.write.csv(path=results_folderpath+'/trip_plans',header=True, mode='overwrite')
+otp_legs_df.write.csv(path=results_folderpath+'/trip_plans',header=True, mode='append')
 
 #otp_legs_df = read_hdfs_folder(sqlContext,results_folderpath+'/trip_plans')
 
@@ -310,10 +310,10 @@ duration_improvement_capacity = best_itineraries_duration.join(executed_trips_du
 	.withColumn('imp_capacity', F.col('executed_duration') - F.col('duration'))
 
 print "Writing duration improvement capacity to file..."
-duration_improvement_capacity.write.csv(path=results_folderpath+'/duration_improvement_capacity',header=True, mode='overwrite')
+duration_improvement_capacity.write.csv(path=results_folderpath+'/duration_improvement_capacity',header=True, mode='append')
 
 print "Writing OTP suggested itineraries with actual time to file..."
-clean_legs_actual_time.write.csv(path=results_folderpath+'/clean_otp_legs_actual_time',header=True, mode='overwrite')
+clean_legs_actual_time.write.csv(path=results_folderpath+'/clean_otp_legs_actual_time',header=True, mode='append')
 
 print "Finishing Script..."
 
