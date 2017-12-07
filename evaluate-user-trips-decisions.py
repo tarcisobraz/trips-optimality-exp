@@ -11,6 +11,8 @@ import json
 import urllib2
 import sys
 from datetime import datetime
+from os.path import isfile, join, splitext
+from glob import glob
 
 #Constants
 MIN_NUM_ARGS = 7
@@ -49,15 +51,15 @@ def read_folders(path, sqlContext, sc, initial_date, final_date):
         else:
             files = glob(path_pattern)
 
-        print files
+        #print files
 
         files = filter(lambda f: initial_date <= datetime.strptime(f.split("/")[-2], '%Y_%m_%d_veiculos') <=
                                  final_date, files)
 
-        print files
+        #print files
 
         return reduce(lambda df1, df2: df1.unionAll(df2),
-                      map(lambda f: read_buste_data_v3(f, sqlContext), files))
+                      map(lambda f: read_buste_data_v3(sqlContext,f), files))
     else:
         return read_file(path, sqlContext)
 
@@ -101,7 +103,7 @@ def get_otp_suggested_trips(od_matrix,otp_url):
 	return trips_otp_response
 
 def advance_od_matrix_start_time(od_matrix,extra_seconds):
-	return od_matrix.withColumn('date_str', F.from_unixtime(F.unix_timestamp(F.col('date')), 'yyyy-MM-dd')) \
+	return od_matrix.withColumn('date_str', F.col('date')) \
 					.withColumn('o_datetime', F.concat(F.col('date_str'), F.lit(' '), F.col('o_timestamp'))) \
 					.withColumn('d_datetime', F.concat(F.col('date_str'), F.lit(' '), F.col('timestamp'))) \
 					.withColumn('executed_duration', (F.unix_timestamp('d_datetime') - F.unix_timestamp('o_datetime'))/60) \
@@ -242,6 +244,7 @@ spark  = SparkSession.builder.getOrCreate()
 spark.conf.set('spark.sql.crossJoin.enabled', 'true')
 
 sc = spark.sparkContext
+sc.setLogLevel("ERROR")
 sqlContext = pyspark.SQLContext(sc)
 
 print "Got Spark Context"
@@ -252,7 +255,8 @@ od_matrix = read_hdfs_folder(sqlContext,od_matrix_folderpath)
 print "Filtering OD-Matrix Data according to analysis input dates..."
 initial_date_secs = int(initial_date.strftime("%s"))
 final_date_secs = int(final_date.strftime("%s"))
-od_matrix = od_matrix.withColumn('date_in_secs', F.unix_timestamp(F.col('date'), 'yyyy-MM-dd')) \
+od_matrix = od_matrix.withColumn('date', F.from_unixtime(F.col('date'),'yyyy-MM-dd')) \
+				.withColumn('date_in_secs', F.unix_timestamp(F.col('date'), 'yyyy-MM-dd')) \
 				.filter((F.col('date_in_secs') >= initial_date_secs) & (F.col('date_in_secs') <= final_date_secs))
 
 print "Preprocessing Data..."
@@ -262,11 +266,11 @@ print "Getting OTP suggested itineraries..."
 otp_suggestions = get_otp_suggested_trips(od_matrix,otp_server_url)
 
 print "Extracting OTP Legs info..."
-#otp_legs_df = prepare_otp_legs_df(extract_otp_trips_legs(otp_suggestions))
-#get_df_stats(otp_legs_df,otp_legs_df.filter('mode == \'BUS\''),'Num OTP Legs','Num OTP Bus Legs')
-#otp_legs_df.write.csv(path=results_folderpath+'/trip_plans',header=True, mode='overwrite')
+otp_legs_df = prepare_otp_legs_df(extract_otp_trips_legs(otp_suggestions))
+get_df_stats(otp_legs_df,otp_legs_df.filter('mode == \'BUS\''),'Num OTP Legs','Num OTP Bus Legs')
+otp_legs_df.write.csv(path=results_folderpath+'/trip_plans',header=True, mode='overwrite')
 
-otp_legs_df = read_hdfs_folder(sqlContext,results_folderpath+'/trip_plans')
+#otp_legs_df = read_hdfs_folder(sqlContext,results_folderpath+'/trip_plans')
 
 print "Reading BUSTE data..."
 #bus_trips_data = read_buste_data_v3(sqlContext, buste_data_folderpath)
@@ -278,7 +282,8 @@ otp_legs_st = find_otp_bus_legs_actual_start_time(otp_legs_df,clean_bus_trips_da
 get_filtered_df_stats(otp_legs_st,otp_legs_df.count(),'Num Legs whose Start was found','Num Legs')
 
 print "Finding OTP Bus Legs Actual End Times in Bus Trips Data..."
-bus_trips_data2 = read_buste_data_v3(sqlContext,buste_data_folderpath)
+#bus_trips_data2 = read_buste_data_v3(sqlContext,buste_data_folderpath)
+bus_trips_data2 = read_folders(buste_data_folderpath, sqlContext, sc, initial_date, final_date)
 clean_bus_trips_data2 = clean_buste_data(bus_trips_data2)
 
 otp_legs_start_end = find_otp_bus_legs_actual_end_time(otp_legs_st,clean_bus_trips_data2)
