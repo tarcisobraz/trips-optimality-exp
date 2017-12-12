@@ -227,158 +227,127 @@ if __name__ == "__main__":
 	otp_server_url = sys.argv[5]
 	results_folderpath = sys.argv[6]
 
-#Print Args
-#print "initial-date:", initial_date
-#print "final-date:", final_date
-#print "od-matrix-folderpath:", od_matrix_folderpath
-#print "buste-data-folderpath:", buste_data_folderpath
-#print "otp-server-url:", otp_server_url
-#print "results-folderpath:", results_folderpath
+
+	#Get Spark Session
+	spark  = SparkSession.builder.getOrCreate()
+	spark.conf.set('spark.sql.crossJoin.enabled', 'true')
+
+	sc = spark.sparkContext
+	sc.setLogLevel("ERROR")
+	sqlContext = pyspark.SQLContext(sc)
+
+	print "Got Spark Context"
+
+	print "Reading OD-Matrix Data..."
+	od_matrix = read_hdfs_folder(sqlContext,od_matrix_folderpath)
+
+	print "Filtering OD-Matrix Data according to analysis input dates..."
+	initial_date_secs = int(initial_date.strftime("%s"))
+	final_date_secs = int(final_date.strftime("%s"))
+	od_matrix = od_matrix.withColumn('date', F.from_unixtime(F.col('date'),'yyyy-MM-dd')) \
+					.withColumn('date_in_secs', F.unix_timestamp(F.col('date'), 'yyyy-MM-dd')) \
+					.filter((F.col('date_in_secs') >= initial_date_secs) & (F.col('date_in_secs') <= final_date_secs))
+
+	print "Preprocessing Data..."
+	od_matrix = advance_od_matrix_start_time(od_matrix,120)
+
+	print "Getting OTP suggested itineraries..."
+	otp_suggestions = get_otp_suggested_trips(od_matrix,otp_server_url)
+
+	print "Extracting OTP Legs info..."
+	otp_legs_df = prepare_otp_legs_df(extract_otp_trips_legs(otp_suggestions))
+	otp_legs_df.write.csv(path=results_folderpath+'/trip_plans',header=True, mode='append')
+
+	#otp_legs_df = read_hdfs_folder(sqlContext,results_folderpath+'/trip_plans')
+
+	total_num_itineraries = otp_legs_df.select('user_trip_id','itinerary_id').distinct().count()
+	total_num_legs = otp_legs_df.count()
+	num_bus_legs = otp_legs_df.filter('mode == \'BUS\'').count()
+
+	print "Total num itineraries:", total_num_itineraries
+	print "Total num legs:", total_num_legs
+	print "Total num bus legs:", num_bus_legs, '(', 100*(num_bus_legs/float(total_num_legs)), '%)'
+
+	print "Reading BUSTE data..."
+	bus_trips_data = read_folders(buste_data_folderpath, sqlContext, sc, initial_date, final_date)
+	clean_bus_trips_data = clean_buste_data(bus_trips_data)
+
+	print "Finding OTP Bus Legs Actual Start Times in Bus Trips Data..."
+	otp_legs_st = find_otp_bus_legs_actual_start_time(otp_legs_df,clean_bus_trips_data)
+
+	num_bus_legs_st = otp_legs_st.count()
+	print "Num Bus Legs whose start was found:", num_bus_legs_st, '(', 100*(num_bus_legs_st/float(num_bus_legs)), '%)'
+
+	#Clean memory
+	#otp_legs_df.unpersist()
+	#clean_bus_trips_data.unpersist()
+
+	print "Finding OTP Bus Legs Actual End Times in Bus Trips Data..."
+	bus_trips_data2 = read_folders(buste_data_folderpath, sqlContext, sc, initial_date, final_date)
+	clean_bus_trips_data2 = clean_buste_data(bus_trips_data2)
+
+	otp_legs_start_end = find_otp_bus_legs_actual_end_time(otp_legs_st,clean_bus_trips_data2)
+	clean_otp_legs_actual_time = clean_otp_legs_actual_time_df(otp_legs_start_end)
+
+	#Clean Memory
+	#otp_legs_st.unpersist()
+	#bus_trips_data2.unpersist()
+
+	print "Enriching OTP suggestions legs with actual time data..."
+	all_legs_actual_time = combine_otp_suggestions_with_bus_legs_actual_time(otp_legs_df,clean_otp_legs_actual_time)
+
+	print "Filtering out itineraries with bus legs not identified in bus data..."
+	clean_legs_actual_time = select_itineraries_fully_identified(all_legs_actual_time)
+
+	num_itineraries_fully_identified = clean_legs_actual_time.select('user_trip_id','itinerary_id').distinct().count()
+	print "Num Itineraries fully identified in BUSTE data:", num_itineraries_fully_identified, '(', 100*(num_itineraries_fully_identified/float(total_num_itineraries)), '%)'
+
+	print "Writing OTP suggested itineraries legs with actual time to file..."
+	clean_legs_actual_time.write.csv(path=results_folderpath+'/otp_legs_matched',header=True, mode='append')
+
+	#Clean Memory
+	#all_legs_actual_time.unpersist()
+
+	print "Adding executed trips to the pool of itinerary possibilities..."
+
+	executed_trips_duration = od_matrix.withColumnRenamed('o_boarding_id','user_trip_id') \
+								.withColumn('itinerary_id', F.lit(0)) \
+								.withColumnRenamed('executed_duration','duration') \
+								.select(['date','user_trip_id','itinerary_id','duration'])
+
+	trips_itineraries_duration = clean_legs_actual_time.groupBy(['date', 'user_trip_id', 'itinerary_id']) \
+									.agg(F.sum('considered_duration_mins').alias('duration')) \
+									.orderBy(['date','user_trip_id','itinerary_id'])
+
+	trips_itineraries_possibilities = trips_itineraries_duration.union(executed_trips_duration)
+
+	#Clean Memory
+	#executed_trips_duration.unpersist()
+	#clean_legs_actual_time.unpersist()
+	#trips_itineraries_duration.unpersist()
+
+	print "Ranking OTP suggested itineraries by actual duration..."
+	ranked_otp_itineraries = rank_otp_itineraries_by_actual_duration(trips_itineraries_possibilities)
+
+	print "Selecting best otp itineraries by actual duration..."
+	best_itineraries_duration = ranked_otp_itineraries.filter(ranked_otp_itineraries.rank == 1) \
+									.drop('rank')
+
+	#Clean Memory
+	ranked_otp_itineraries.unpersist()
+
+	print "Computing executed trips duration..."
+	executed_trips_with_time =  od_matrix.withColumnRenamed('o_boarding_id','user_trip_id') \
+								.select(['date','user_trip_id','o_datetime','cardNum','birthdate','gender','executed_duration'])                 
+
+	print "Comparing Executed Trips with Best Suggested trips and calculating improvement capacity..."
+	duration_improvement_capacity = best_itineraries_duration.join(executed_trips_with_time, on=['date','user_trip_id']) \
+		.withColumn('imp_capacity', F.col('executed_duration') - F.col('duration'))
+
+	print "Writing duration improvement capacity to file..."
+	duration_improvement_capacity.write.csv(path=results_folderpath+'/duration_improvement_capacity',header=True, mode='append')
 
 
-#Get Spark Session
-spark  = SparkSession.builder.getOrCreate()
-spark.conf.set('spark.sql.crossJoin.enabled', 'true')
-
-sc = spark.sparkContext
-sc.setLogLevel("ERROR")
-sqlContext = pyspark.SQLContext(sc)
-
-print "Got Spark Context"
-
-print "Reading OD-Matrix Data..."
-od_matrix = read_hdfs_folder(sqlContext,od_matrix_folderpath)
-
-print "Filtering OD-Matrix Data according to analysis input dates..."
-initial_date_secs = int(initial_date.strftime("%s"))
-final_date_secs = int(final_date.strftime("%s"))
-od_matrix = od_matrix.withColumn('date', F.from_unixtime(F.col('date'),'yyyy-MM-dd')) \
-				.withColumn('date_in_secs', F.unix_timestamp(F.col('date'), 'yyyy-MM-dd')) \
-				.filter((F.col('date_in_secs') >= initial_date_secs) & (F.col('date_in_secs') <= final_date_secs))
-
-print "Preprocessing Data..."
-od_matrix = advance_od_matrix_start_time(od_matrix,120)
-
-print "Getting OTP suggested itineraries..."
-otp_suggestions = get_otp_suggested_trips(od_matrix,otp_server_url)
-
-print "Extracting OTP Legs info..."
-otp_legs_df = prepare_otp_legs_df(extract_otp_trips_legs(otp_suggestions))
-otp_legs_df.write.csv(path=results_folderpath+'/trip_plans',header=True, mode='append')
-
-#otp_legs_df = read_hdfs_folder(sqlContext,results_folderpath+'/trip_plans')
-
-total_num_itineraries = otp_legs_df.select('user_trip_id','itinerary_id').distinct().count()
-total_num_legs = otp_legs_df.count()
-num_bus_legs = otp_legs_df.filter('mode == \'BUS\'').count()
-
-print "Total num itineraries:", total_num_itineraries
-print "Total num legs:", total_num_legs
-print "Total num bus legs:", num_bus_legs, '(', 100*(num_bus_legs/float(total_num_legs)), '%)'
-
-print "Reading BUSTE data..."
-bus_trips_data = read_folders(buste_data_folderpath, sqlContext, sc, initial_date, final_date)
-clean_bus_trips_data = clean_buste_data(bus_trips_data)
-
-print "Finding OTP Bus Legs Actual Start Times in Bus Trips Data..."
-otp_legs_st = find_otp_bus_legs_actual_start_time(otp_legs_df,clean_bus_trips_data)
-
-num_bus_legs_st = otp_legs_st.count()
-print "Num Bus Legs whose start was found:", num_bus_legs_st, '(', 100*(num_bus_legs_st/float(num_bus_legs)), '%)'
-
-#Clean memory
-otp_legs_df.unpersist()
-clean_bus_trips_data.unpersist()
-
-print "Finding OTP Bus Legs Actual End Times in Bus Trips Data..."
-bus_trips_data2 = read_folders(buste_data_folderpath, sqlContext, sc, initial_date, final_date)
-clean_bus_trips_data2 = clean_buste_data(bus_trips_data2)
-
-otp_legs_start_end = find_otp_bus_legs_actual_end_time(otp_legs_st,clean_bus_trips_data2)
-clean_otp_legs_actual_time = clean_otp_legs_actual_time_df(otp_legs_start_end)
-
-#Clean Memory
-otp_legs_st.unpersist()
-bus_trips_data2.unpersist()
-
-print "Enriching OTP suggestions legs with actual time data..."
-all_legs_actual_time = combine_otp_suggestions_with_bus_legs_actual_time(otp_legs_df,clean_otp_legs_actual_time)
-
-print "Filtering out itineraries with bus legs not identified in bus data..."
-clean_legs_actual_time = select_itineraries_fully_identified(all_legs_actual_time)
-
-num_itineraries_fully_identified = clean_legs_actual_time.select('user_trip_id','itinerary_id').distinct().count()
-print "Num Itineraries fully identified in BUSTE data:", num_itineraries_fully_identified, '(', 100*(num_itineraries_fully_identified/float(total_num_itineraries)), '%)'
-
-print "Writing OTP suggested itineraries legs with actual time to file..."
-clean_legs_actual_time.write.csv(path=results_folderpath+'/otp_legs_matched',header=True, mode='append')
-
-#Clean Memory
-all_legs_actual_time.unpersist()
-
-print "Adding executed trips to the pool of itinerary possibilities..."
-
-executed_trips_duration = od_matrix.withColumnRenamed('o_boarding_id','user_trip_id') \
-                            .withColumn('itinerary_id', F.lit(0)) \
-                            .withColumnRenamed('executed_duration','duration') \
-                            .select(['date','user_trip_id','itinerary_id','duration'])
-
-trips_itineraries_duration = clean_legs_actual_time.groupBy(['date', 'user_trip_id', 'itinerary_id']) \
-                                .agg(F.sum('considered_duration_mins').alias('duration')) \
-                                .orderBy(['date','user_trip_id','itinerary_id'])
-
-trips_itineraries_possibilities = trips_itineraries_duration.union(executed_trips_duration)
-
-#Clean Memory
-executed_trips_duration.unpersist()
-clean_legs_actual_time.unpersist()
-trips_itineraries_duration.unpersist()
-
-print "Ranking OTP suggested itineraries by actual duration..."
-ranked_otp_itineraries = rank_otp_itineraries_by_actual_duration(trips_itineraries_possibilities)
-
-print "Selecting best otp itineraries by actual duration..."
-best_itineraries_duration = ranked_otp_itineraries.filter(ranked_otp_itineraries.rank == 1) \
-                                .drop('rank')
-
-#Clean Memory
-ranked_otp_itineraries.unpersist()
-
-print "Computing executed trips duration..."
-executed_trips_with_time =  od_matrix.withColumnRenamed('o_boarding_id','user_trip_id') \
-                            .select(['date','user_trip_id','o_datetime','executed_duration'])                            
-print "Comparing Executed Trips with Best Suggested trips and calculating improvement capacity..."
-duration_improvement_capacity = best_itineraries_duration.join(executed_trips_with_time, on=['date','user_trip_id']) \
-	.withColumn('imp_capacity', F.col('executed_duration') - F.col('duration'))
-
-print "Writing duration improvement capacity to file..."
-duration_improvement_capacity.write.csv(path=results_folderpath+'/duration_improvement_capacity',header=True, mode='append')
-
-
-print "Finishing Script..."
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+	print "Finishing Script..."
+	sc.stop()
 
