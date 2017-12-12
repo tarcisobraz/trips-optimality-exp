@@ -178,15 +178,14 @@ def find_otp_bus_legs_actual_start_time(otp_legs_df,clean_bus_trips_df):
 	return otp_legs_start
 
 def find_otp_bus_legs_actual_end_time(otp_legs_st,clean_bus_trips):
-	trip_plans_df_end = otp_legs_st.withColumnRenamed('to_stop_id','stopPointId')
-	trip_plans_start_end = trip_plans_df_end.join(clean_bus_trips, ['date','route','busCode','tripNum','stopPointId'], how='inner') \
-		.na.drop(subset=['timestamp']) \
-		.withColumn('timediff',F.abs(F.unix_timestamp(F.col('timestamp')) - F.unix_timestamp(F.col('otp_end_time'))))
-	trip_plans_start_end = trip_plans_start_end.withColumnRenamed('timestamp', 'to_timestamp') \
-		.withColumnRenamed('stopPointId','to_stop_id') \
-		.orderBy(['date','route','stopPointId','timediff'])
-	
-	return trip_plans_start_end
+	return otp_legs_st \
+				.withColumnRenamed('to_stop_id','stopPointId') \
+				.join(clean_bus_trips, ['date','route','busCode','tripNum','stopPointId'], how='inner') \
+				.na.drop(subset=['timestamp']) \
+				.withColumn('timediff',F.abs(F.unix_timestamp(F.col('timestamp')) - F.unix_timestamp(F.col('otp_end_time')))) \
+				.withColumnRenamed('timestamp', 'to_timestamp') \
+				.withColumnRenamed('stopPointId','to_stop_id') \
+				.orderBy(['date','route','stopPointId','timediff'])
 
 def clean_otp_legs_actual_time_df(otp_legs_st_end_df):
 	clean_otp_legs_df = otp_legs_start_end.select(['date','user_trip_id','itinerary_id','leg_id','route','busCode','tripNum','from_stop_id','from_timestamp','to_stop_id','to_timestamp']) \
@@ -194,21 +193,60 @@ def clean_otp_legs_actual_time_df(otp_legs_st_end_df):
                         .orderBy(['date','user_trip_id','itinerary_id','leg_id'])
 	return clean_otp_legs_df.filter(clean_otp_legs_df.actual_duration_mins > 0)
 	
-	
 def combine_otp_suggestions_with_bus_legs_actual_time(otp_suggestions,bus_legs_actual_time):
 	return otp_legs_df.join(clean_otp_legs_actual_time, on=['date','user_trip_id','itinerary_id','leg_id', 'route', 'from_stop_id','to_stop_id'], how='left_outer') \
-				.withColumn('considered_duration_mins', F.when(F.col('mode') == F.lit('BUS'), F.col('actual_duration_mins')).otherwise(F.col('otp_duration_mins')))
-
+				.withColumn('considered_duration_mins', F.when(F.col('mode') == F.lit('BUS'), F.col('actual_duration_mins')).otherwise(F.col('otp_duration_mins'))) \
+				.withColumn('considered_start_time', F.when(F.col('mode') == F.lit('BUS'), F.col('from_timestamp')).otherwise(F.col('otp_start_time')))
 
 def select_itineraries_fully_identified(otp_itineraries_legs):
-	legs_not_fully_identified = otp_itineraries_legs.filter((otp_itineraries_legs.mode == 'BUS') & (otp_itineraries_legs.busCode.isNull()))
-	itineraries_not_fully_identified = legs_not_fully_identified.select(['date','user_trip_id','itinerary_id']).distinct()
+	itineraries_not_fully_identified = otp_itineraries_legs \
+										.filter((otp_itineraries_legs.mode == 'BUS') & (otp_itineraries_legs.busCode.isNull())) \
+										.select(['date','user_trip_id','itinerary_id']).distinct()
 	itineraries_fully_identified = otp_itineraries_legs.select(['date','user_trip_id','itinerary_id']).subtract(itineraries_not_fully_identified)
 	return otp_itineraries_legs.join(itineraries_fully_identified, on=['date','user_trip_id','itinerary_id'], how='inner')
 
 def rank_otp_itineraries_by_actual_duration(trips_itineraries):
 	itineraries_window = Window.partitionBy(['date','user_trip_id']).orderBy(['duration'])
 	return trips_itineraries.withColumn('rank', F.row_number().over(itineraries_window))
+
+def get_trips_itineraries_pool(trips_otp_alternatives,od_mat):
+	return trips_otp_alternatives.union(od_mat.withColumnRenamed('o_boarding_id','user_trip_id') \
+								.withColumn('itinerary_id', F.lit(0)) \
+								.withColumnRenamed('executed_duration','duration') \
+								.withColumnRenamed('o_datetime', 'alt_start_time') \
+								.select(['date','user_trip_id','itinerary_id','alt_start_time','duration']))
+
+def determining_trips_alternatives_feasibility(otp_itineraries_legs,od_mat):
+	trips_itineraries_possibilities = otp_itineraries_legs \
+						.groupBy(['date', 'user_trip_id', 'itinerary_id']) \
+						.agg(F.sum('considered_duration_mins').alias('duration'), \
+                           	 F.first('considered_start_time').alias('alt_start_time')) \
+						.orderBy(['date','user_trip_id','itinerary_id']) \
+			.join(od_mat \
+						.withColumnRenamed('o_boarding_id','user_trip_id') \
+						.withColumnRenamed('o_datetime','exec_start_time') \
+						.select(['date','user_trip_id','exec_start_time']),
+				on=['date','user_trip_id']) \
+			.withColumn('start_diff', (F.abs(F.unix_timestamp(F.col('exec_start_time')) - F.unix_timestamp(F.col('alt_start_time')))/60))
+
+	filtered_trips_possibilities = trips_itineraries_possibilities \
+										.filter(F.col('start_diff') <= 20) \
+                                		.drop('exec_start_time', 'start_diff')
+
+	return (trips_itineraries_possibilities,filtered_trips_possibilities)
+
+def select_best_trip_itineraries(itineraries_pool):
+	return rank_otp_itineraries_by_actual_duration(itineraries_pool).filter('rank == 1') \
+									.drop('rank')
+
+def compute_improvement_capacity(best_itineraries,od_mat):
+	return  od_mat \
+				.withColumnRenamed('o_boarding_id','user_trip_id') \
+				.withColumnRenamed('o_datetime','exec_start_time') \
+				.select(['date','user_trip_id','cardNum','birthdate','gender','exec_start_time','executed_duration']) \
+			.join(best_itineraries, on=['date','user_trip_id']) \
+			.withColumn('imp_capacity', F.col('executed_duration') - F.col('duration'))
+
 
 
 #Main Code
@@ -308,45 +346,25 @@ if __name__ == "__main__":
 	#Clean Memory
 	#all_legs_actual_time.unpersist()
 
+	print "Identifying itinerary alternatives which are feasible..."
+	trips_itineraries_possibilities, filtered_trips_possibilities = determining_trips_alternatives_feasibility(clean_legs_actual_time,od_matrix)	
+
+	print "Writing itineraries possibilities with feasibility to file..."
+	trips_itineraries_possibilities.write.csv(path=results_folderpath+'/itineraries_alternatives',header=True, mode='append')
+
 	print "Adding executed trips to the pool of itinerary possibilities..."
-
-	executed_trips_duration = od_matrix.withColumnRenamed('o_boarding_id','user_trip_id') \
-								.withColumn('itinerary_id', F.lit(0)) \
-								.withColumnRenamed('executed_duration','duration') \
-								.select(['date','user_trip_id','itinerary_id','duration'])
-
-	trips_itineraries_duration = clean_legs_actual_time.groupBy(['date', 'user_trip_id', 'itinerary_id']) \
-									.agg(F.sum('considered_duration_mins').alias('duration')) \
-									.orderBy(['date','user_trip_id','itinerary_id'])
-
-	trips_itineraries_possibilities = trips_itineraries_duration.union(executed_trips_duration)
-
-	#Clean Memory
-	#executed_trips_duration.unpersist()
-	#clean_legs_actual_time.unpersist()
-	#trips_itineraries_duration.unpersist()
-
-	print "Ranking OTP suggested itineraries by actual duration..."
-	ranked_otp_itineraries = rank_otp_itineraries_by_actual_duration(trips_itineraries_possibilities)
+	trips_itineraries_pool = get_trips_itineraries_pool(filtered_trips_possibilities,od_matrix)
 
 	print "Selecting best otp itineraries by actual duration..."
-	best_itineraries_duration = ranked_otp_itineraries.filter(ranked_otp_itineraries.rank == 1) \
-									.drop('rank')
+	best_trips_itineraries = select_best_trip_itineraries(trips_itineraries_pool)
 
 	#Clean Memory
-	ranked_otp_itineraries.unpersist()
-
-	print "Computing executed trips duration..."
-	executed_trips_with_time =  od_matrix.withColumnRenamed('o_boarding_id','user_trip_id') \
-								.select(['date','user_trip_id','o_datetime','cardNum','birthdate','gender','executed_duration'])                 
-
-	print "Comparing Executed Trips with Best Suggested trips and calculating improvement capacity..."
-	duration_improvement_capacity = best_itineraries_duration.join(executed_trips_with_time, on=['date','user_trip_id']) \
-		.withColumn('imp_capacity', F.col('executed_duration') - F.col('duration'))
-
+	#clean_legs_actual_time.unpersist()
+	print "Computing Improvement Capacity..."
+	duration_improvement_capacity = compute_improvement_capacity(best_trips_itineraries,od_matrix)
+	
 	print "Writing duration improvement capacity to file..."
 	duration_improvement_capacity.write.csv(path=results_folderpath+'/duration_improvement_capacity',header=True, mode='append')
-
 
 	print "Finishing Script..."
 	sc.stop()
