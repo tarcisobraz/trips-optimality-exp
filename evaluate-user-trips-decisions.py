@@ -168,19 +168,17 @@ def clean_buste_data(buste_data):
 		.withColumn('timestamp',F.from_unixtime(F.unix_timestamp(F.concat(F.col('date'),F.lit(' '),F.col('timestamp')), 'yyyy-MM-dd HH:mm:ss')))
 
 def find_otp_bus_legs_actual_start_time(otp_legs_df,clean_bus_trips_df):
-	otp_legs_start = otp_legs_df.withColumn('stopPointId', F.col('from_stop_id'))
-	otp_legs_start = otp_legs_start.join(clean_bus_trips_df, ['date','route','stopPointId'], how='inner') \
-                        .na.drop(subset=['timestamp']) \
-                        .withColumn('timediff',F.abs(F.unix_timestamp(F.col('timestamp')) - F.unix_timestamp(F.col('otp_start_time')))) \
-                        .drop('otp_duration')
 	w = Window.partitionBy(['date','user_trip_id','itinerary_id','route','from_stop_id']).orderBy(['timediff'])
-	otp_legs_start = otp_legs_start.withColumn('rn', F.row_number().over(w)) \
-                    .where(F.col('rn') == 1)
-	otp_legs_start = otp_legs_start \
+	return otp_legs_df \
+		.withColumn('stopPointId', F.col('from_stop_id')) \
+		.join(clean_bus_trips_df, ['date','route','stopPointId'], how='inner') \
+		.na.drop(subset=['timestamp']) \
+		.withColumn('timediff',F.abs(F.unix_timestamp(F.col('timestamp')) - F.unix_timestamp(F.col('otp_start_time')))) \
+		.drop('otp_duration') \
+		.withColumn('rn', F.row_number().over(w)) \
+		.where(F.col('rn') == 1) \
 		.select(['date','user_trip_id','itinerary_id','leg_id','route','busCode','tripNum','from_stop_id','otp_start_time','timestamp','to_stop_id','otp_end_time']) \
 		.withColumnRenamed('timestamp','from_timestamp')
-
-	return otp_legs_start
 
 def find_otp_bus_legs_actual_end_time(otp_legs_st,clean_bus_trips):
 	return otp_legs_st \
@@ -193,13 +191,15 @@ def find_otp_bus_legs_actual_end_time(otp_legs_st,clean_bus_trips):
 				.orderBy(['date','route','stopPointId','timediff'])
 
 def clean_otp_legs_actual_time_df(otp_legs_st_end_df):
-	clean_otp_legs_df = otp_legs_start_end.select(['date','user_trip_id','itinerary_id','leg_id','route','busCode','tripNum','from_stop_id','from_timestamp','to_stop_id','to_timestamp']) \
-                        .withColumn('actual_duration_mins', (F.unix_timestamp(F.col('to_timestamp')) - F.unix_timestamp(F.col('from_timestamp')))/60) \
-                        .orderBy(['date','user_trip_id','itinerary_id','leg_id'])
-	return clean_otp_legs_df.filter(clean_otp_legs_df.actual_duration_mins > 0)
+	return otp_legs_start_end \
+				.select(['date','user_trip_id','itinerary_id','leg_id','route','busCode','tripNum','from_stop_id','from_timestamp','to_stop_id','to_timestamp']) \
+				.withColumn('actual_duration_mins', (F.unix_timestamp(F.col('to_timestamp')) - F.unix_timestamp(F.col('from_timestamp')))/60) \
+				.orderBy(['date','user_trip_id','itinerary_id','leg_id']) \
+				.filter('actual_duration_mins > 0')
 	
 def combine_otp_suggestions_with_bus_legs_actual_time(otp_suggestions,bus_legs_actual_time):
-	return otp_legs_df.join(clean_otp_legs_actual_time, on=['date','user_trip_id','itinerary_id','leg_id', 'route', 'from_stop_id','to_stop_id'], how='left_outer') \
+	return otp_legs_df \
+				.join(clean_otp_legs_actual_time, on=['date','user_trip_id','itinerary_id','leg_id', 'route', 'from_stop_id','to_stop_id'], how='left_outer') \
 				.withColumn('considered_duration_mins', F.when(F.col('mode') == F.lit('BUS'), F.col('actual_duration_mins')).otherwise(F.col('otp_duration_mins'))) \
 				.withColumn('considered_start_time', F.when(F.col('mode') == F.lit('BUS'), F.col('from_timestamp')).otherwise(F.col('otp_start_time')))
 
@@ -215,11 +215,12 @@ def rank_otp_itineraries_by_actual_duration(trips_itineraries):
 	return trips_itineraries.withColumn('rank', F.row_number().over(itineraries_window))
 
 def get_trips_itineraries_pool(trips_otp_alternatives,od_mat):
-	return trips_otp_alternatives.union(od_mat.withColumnRenamed('o_boarding_id','user_trip_id') \
-								.withColumn('itinerary_id', F.lit(0)) \
-								.withColumnRenamed('executed_duration','duration') \
-								.withColumnRenamed('o_datetime', 'alt_start_time') \
-								.select(['date','user_trip_id','itinerary_id','alt_start_time','duration']))
+	return trips_otp_alternatives \
+				.union(od_mat.withColumnRenamed('o_boarding_id','user_trip_id') \
+				.withColumn('itinerary_id', F.lit(0)) \
+				.withColumnRenamed('executed_duration','duration') \
+				.withColumnRenamed('o_datetime', 'alt_start_time') \
+				.select(['date','user_trip_id','itinerary_id','alt_start_time','duration']))
 
 def determining_trips_alternatives_feasibility(otp_itineraries_legs,od_mat):
 	trips_itineraries_possibilities = otp_itineraries_legs \
@@ -324,11 +325,11 @@ if __name__ == "__main__":
 	bus_trips_data.unpersist(blocking=True)
 	clean_bus_trips_data.unpersist(blocking=True)
 
-
-	print "Finding OTP Bus Legs Actual End Times in Bus Trips Data..."
+	print "Reading BUSTE data again..."
 	bus_trips_data2 = read_folders(buste_data_folderpath, sqlContext, sc, initial_date, final_date,'_veiculos')
 	clean_bus_trips_data2 = clean_buste_data(bus_trips_data2)
 
+	print "Finding OTP Bus Legs Actual End Times in Bus Trips Data..."
 	otp_legs_start_end = find_otp_bus_legs_actual_end_time(otp_legs_st,clean_bus_trips_data2)
 	clean_otp_legs_actual_time = clean_otp_legs_actual_time_df(otp_legs_start_end)
 
@@ -338,16 +339,15 @@ if __name__ == "__main__":
 	clean_bus_trips_data2.unpersist(blocking=True)
 	otp_legs_start_end.unpersist(blocking=True)
 
-
 	print "Enriching OTP suggestions legs with actual time data..."
 	all_legs_actual_time = combine_otp_suggestions_with_bus_legs_actual_time(otp_legs_df,clean_otp_legs_actual_time)
-
+	
 	print "Filtering out itineraries with bus legs not identified in bus data..."
 	clean_legs_actual_time = select_itineraries_fully_identified(all_legs_actual_time)
 
 	num_itineraries_fully_identified = clean_legs_actual_time.select('user_trip_id','itinerary_id').distinct().count()
 	print "Num Itineraries fully identified in BUSTE data:", num_itineraries_fully_identified, '(', 100*(num_itineraries_fully_identified/float(total_num_itineraries)), '%)'
-
+	
 	print "Writing OTP suggested itineraries legs with actual time to file..."
 	clean_legs_actual_time.write.csv(path=results_folderpath+'/otp_legs_matched',header=True, mode='append')
 
