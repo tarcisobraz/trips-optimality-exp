@@ -28,7 +28,7 @@ def rename_columns(df, list_of_tuples):
         df = df.withColumnRenamed(old_col, new_col)
     return df
 
-def read_folders(path, sqlContext, sc, initial_date, final_date):
+def read_folders(path, sqlContext, sc, initial_date, final_date, folder_suffix):
     extension = splitext(path)[1]
 
     if extension == "":
@@ -51,14 +51,19 @@ def read_folders(path, sqlContext, sc, initial_date, final_date):
         else:
             files = glob(path_pattern)
 
-        #print files
+        #print initial_date, final_date
+        #print datetime.strptime(files[0].split('/')[-2],('%Y_%m_%d' + folder_suffix))
 
-        files = filter(lambda f: initial_date <= datetime.strptime(f.split("/")[-2], '%Y_%m_%d_veiculos') <=
+        files = filter(lambda f: initial_date <= datetime.strptime(f.split("/")[-2], ('%Y_%m_%d' + folder_suffix)) <=
                                  final_date, files)
-
+		
+        #print len(files)
         #print files
-
-        return reduce(lambda df1, df2: df1.unionAll(df2),
+        if folder_suffix == '_od':
+            return reduce(lambda df1, df2: df1.unionAll(df2),
+                      map(lambda f: read_hdfs_folder(sqlContext,f), files))
+        else:
+	        return reduce(lambda df1, df2: df1.unionAll(df2),
                       map(lambda f: read_buste_data_v3(sqlContext,f), files))
     else:
         return read_file(path, sqlContext)
@@ -277,14 +282,10 @@ if __name__ == "__main__":
 	print "Got Spark Context"
 
 	print "Reading OD-Matrix Data..."
-	od_matrix = read_hdfs_folder(sqlContext,od_matrix_folderpath)
-
-	print "Filtering OD-Matrix Data according to analysis input dates..."
-	initial_date_secs = int(initial_date.strftime("%s"))
-	final_date_secs = int(final_date.strftime("%s"))
-	od_matrix = od_matrix.withColumn('date', F.from_unixtime(F.col('date'),'yyyy-MM-dd')) \
-					.withColumn('date_in_secs', F.unix_timestamp(F.col('date'), 'yyyy-MM-dd')) \
-					.filter((F.col('date_in_secs') >= initial_date_secs) & (F.col('date_in_secs') <= final_date_secs))
+	od_matrix_day_folderpath = od_matrix_folderpath + '/' + initial_date.strftime('%Y_%m_%d') + '_od'
+	od_matrix = read_hdfs_folder(sqlContext, od_matrix_day_folderpath) \
+					.withColumn('date', F.from_unixtime(F.col('date'),'yyyy-MM-dd')) \
+					.withColumn('date_in_secs', F.unix_timestamp(F.col('date'), 'yyyy-MM-dd'))
 
 	print "Preprocessing Data..."
 	od_matrix = advance_od_matrix_start_time(od_matrix,120)
@@ -295,6 +296,8 @@ if __name__ == "__main__":
 	print "Extracting OTP Legs info..."
 	otp_legs_df = prepare_otp_legs_df(extract_otp_trips_legs(otp_suggestions))
 	otp_legs_df.write.csv(path=results_folderpath+'/trip_plans',header=True, mode='append')
+
+	otp_suggestions = None
 
 	#otp_legs_df = read_hdfs_folder(sqlContext,results_folderpath+'/trip_plans')
 
@@ -307,7 +310,7 @@ if __name__ == "__main__":
 	print "Total num bus legs:", num_bus_legs, '(', 100*(num_bus_legs/float(total_num_legs)), '%)'
 
 	print "Reading BUSTE data..."
-	bus_trips_data = read_folders(buste_data_folderpath, sqlContext, sc, initial_date, final_date)
+	bus_trips_data = read_folders(buste_data_folderpath, sqlContext, sc, initial_date, final_date,'_veiculos')
 	clean_bus_trips_data = clean_buste_data(bus_trips_data)
 
 	print "Finding OTP Bus Legs Actual Start Times in Bus Trips Data..."
@@ -317,19 +320,24 @@ if __name__ == "__main__":
 	print "Num Bus Legs whose start was found:", num_bus_legs_st, '(', 100*(num_bus_legs_st/float(num_bus_legs)), '%)'
 
 	#Clean memory
-	#otp_legs_df.unpersist()
-	#clean_bus_trips_data.unpersist()
+	otp_legs_df.unpersist(blocking=True)
+	bus_trips_data.unpersist(blocking=True)
+	clean_bus_trips_data.unpersist(blocking=True)
+
 
 	print "Finding OTP Bus Legs Actual End Times in Bus Trips Data..."
-	bus_trips_data2 = read_folders(buste_data_folderpath, sqlContext, sc, initial_date, final_date)
+	bus_trips_data2 = read_folders(buste_data_folderpath, sqlContext, sc, initial_date, final_date,'_veiculos')
 	clean_bus_trips_data2 = clean_buste_data(bus_trips_data2)
 
 	otp_legs_start_end = find_otp_bus_legs_actual_end_time(otp_legs_st,clean_bus_trips_data2)
 	clean_otp_legs_actual_time = clean_otp_legs_actual_time_df(otp_legs_start_end)
 
 	#Clean Memory
-	#otp_legs_st.unpersist()
-	#bus_trips_data2.unpersist()
+	otp_legs_st.unpersist(blocking=True)
+	bus_trips_data2.unpersist(blocking=True)
+	clean_bus_trips_data2.unpersist(blocking=True)
+	otp_legs_start_end.unpersist(blocking=True)
+
 
 	print "Enriching OTP suggestions legs with actual time data..."
 	all_legs_actual_time = combine_otp_suggestions_with_bus_legs_actual_time(otp_legs_df,clean_otp_legs_actual_time)
@@ -344,7 +352,9 @@ if __name__ == "__main__":
 	clean_legs_actual_time.write.csv(path=results_folderpath+'/otp_legs_matched',header=True, mode='append')
 
 	#Clean Memory
-	#all_legs_actual_time.unpersist()
+	clean_otp_legs_actual_time.unpersist(blocking=True)
+	all_legs_actual_time.unpersist(blocking=True)
+	
 
 	print "Identifying itinerary alternatives which are feasible..."
 	trips_itineraries_possibilities, filtered_trips_possibilities = determining_trips_alternatives_feasibility(clean_legs_actual_time,od_matrix)	
@@ -359,9 +369,17 @@ if __name__ == "__main__":
 	best_trips_itineraries = select_best_trip_itineraries(trips_itineraries_pool)
 
 	#Clean Memory
-	#clean_legs_actual_time.unpersist()
+	clean_legs_actual_time.unpersist(blocking=True)
+	trips_itineraries_possibilities.unpersist(blocking=True)
+	filtered_trips_possibilities.unpersist(blocking=True)
+	trips_itineraries_pool.unpersist(blocking=True)
+
+
 	print "Computing Improvement Capacity..."
 	duration_improvement_capacity = compute_improvement_capacity(best_trips_itineraries,od_matrix)
+
+	best_trips_itineraries.unpersist(blocking=True)
+	od_matrix.unpersist(blocking=True)
 	
 	print "Writing duration improvement capacity to file..."
 	duration_improvement_capacity.write.csv(path=results_folderpath+'/duration_improvement_capacity',header=True, mode='append')
