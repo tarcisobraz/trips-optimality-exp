@@ -296,7 +296,7 @@ if __name__ == "__main__":
 
 	print "Extracting OTP Legs info..."
 	otp_legs_df = prepare_otp_legs_df(extract_otp_trips_legs(otp_suggestions))
-	#otp_legs_df.write.csv(path=results_folderpath+'/trip_plans',header=True, mode='append')
+	otp_legs_df.write.csv(path=results_folderpath+'/trip_plans',header=True, mode='append')
 
 	otp_suggestions = None
 
@@ -349,7 +349,7 @@ if __name__ == "__main__":
 	print "Num Itineraries fully identified in BUSTE data:", num_itineraries_fully_identified, '(', 100*(num_itineraries_fully_identified/float(total_num_itineraries)), '%)'
 	
 	print "Writing OTP suggested itineraries legs with actual time to file..."
-	#clean_legs_actual_time.write.csv(path=results_folderpath+'/otp_legs_matched',header=True, mode='append')
+	clean_legs_actual_time.write.csv(path=results_folderpath+'/otp_legs_matched',header=True, mode='append')
 
 	#Clean Memory
 	clean_otp_legs_actual_time.unpersist(blocking=True)
@@ -360,7 +360,7 @@ if __name__ == "__main__":
 	trips_itineraries_possibilities, filtered_trips_possibilities = determining_trips_alternatives_feasibility(clean_legs_actual_time,od_matrix)	
 
 	print "Writing itineraries possibilities with feasibility to file..."
-	#trips_itineraries_possibilities.write.csv(path=results_folderpath+'/itineraries_alternatives',header=True, mode='append')
+	trips_itineraries_possibilities.write.csv(path=results_folderpath+'/itineraries_alternatives',header=True, mode='append')
 
 	print "Adding executed trips to the pool of itinerary possibilities..."
 	trips_itineraries_pool = get_trips_itineraries_pool(filtered_trips_possibilities,od_matrix)
