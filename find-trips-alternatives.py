@@ -310,7 +310,7 @@ if __name__ == "__main__":
 	print "Reducing OD Matrix size to 50 trips for testing purposes..."
 	od_matrix = od_matrix.limit(50)
 
-	num_trips = od_matrix.count()
+	#num_trips = od_matrix.count()
 
 	print "Getting OTP suggested itineraries..."
 	otp_suggestions = get_otp_suggested_trips(od_matrix,otp_server_url)
@@ -339,7 +339,7 @@ if __name__ == "__main__":
 
 	executed_trips_schedule = None
 	
-	print "Filtering executed itineraries whose schedule was not found..."
+	print "Selecting executed itineraries whose schedule was found..."
 	matched_executed_trips = od_matrix \
                      .withColumnRenamed('o_stop_id','from_stop_id') \
                      .withColumnRenamed('stopPointId','to_stop_id') \
@@ -349,16 +349,16 @@ if __name__ == "__main__":
                 .withColumnRenamed('otp_duration_mins','planned_duration_mins') \
                 .withColumnRenamed('otp_start_time','planned_start_time')
 
-	print "Total num Trips: " + str(num_trips)
-	print "Num Executed Itineraries with Schedule found: " + str(matched_executed_trips.count())
+	#print "Total num Trips: " + str(num_trips)
+	#print "Num Executed Itineraries with Schedule found: " + str(matched_executed_trips.count())
 
 	total_num_itineraries = otp_legs_df.select('user_trip_id','itinerary_id').distinct().count()
 	total_num_legs = otp_legs_df.count()
 	num_bus_legs = otp_legs_df.filter('mode == \'BUS\'').count()
 
-	print "Total num itineraries:", total_num_itineraries
-	print "Total num legs:", total_num_legs
-	print "Total num bus legs:", num_bus_legs, '(', 100*(num_bus_legs/float(total_num_legs)), '%)'
+	#print "Total num itineraries:", total_num_itineraries
+	#print "Total num legs:", total_num_legs
+	#print "Total num bus legs:", num_bus_legs, '(', 100*(num_bus_legs/float(total_num_legs)), '%)'
 
 	print "Reading BUSTE data..."
 	bus_trips_data = read_folders(buste_data_folderpath, sqlContext, sc, initial_date, final_date,'')
@@ -367,8 +367,8 @@ if __name__ == "__main__":
 	print "Finding OTP Bus Legs Actual Start Times in Bus Trips Data..."
 	otp_legs_st = find_otp_bus_legs_actual_start_time(otp_legs_df,clean_bus_trips_data)
 
-	num_bus_legs_st = otp_legs_st.count()
-	print "Num Bus Legs whose start was found:", num_bus_legs_st, '(', 100*(num_bus_legs_st/float(num_bus_legs)), '%)'
+	#num_bus_legs_st = otp_legs_st.count()
+	#print "Num Bus Legs whose start was found:", num_bus_legs_st, '(', 100*(num_bus_legs_st/float(num_bus_legs)), '%)'
 
 	#Clean memory
 	od_matrix.unpersist(blocking=True)
@@ -385,8 +385,8 @@ if __name__ == "__main__":
 	otp_legs_start_end = find_otp_bus_legs_actual_end_time(otp_legs_st,clean_bus_trips_data2)
 	clean_otp_legs_actual_time = clean_otp_legs_actual_time_df(otp_legs_start_end)
 
-	num_matched_bus_legs_st = clean_otp_legs_actual_time.count()
-	print "Num Bus Legs whose end was found:", num_matched_bus_legs_st, '(', 100*(num_matched_bus_legs_st/float(num_bus_legs)), '%)'
+	#num_matched_bus_legs_st = clean_otp_legs_actual_time.count()
+	#print "Num Bus Legs whose end was found:", num_matched_bus_legs_st, '(', 100*(num_matched_bus_legs_st/float(num_bus_legs)), '%)'
 
 	#Clean Memory
 	otp_legs_st.unpersist(blocking=True)
@@ -459,9 +459,9 @@ if __name__ == "__main__":
                 .join(executed_trips_with_sugestions_matched, on='user_trip_id',how='inner') \
                 .orderBy(['date','user_trip_id','itinerary_id'])
 
-	print "Num Trips: " + str(num_trips)
-	print "Num Trips with Matched Suggestions: " + str(executed_trips_with_sugestions_matched.count())
-	print "Num Trips Alternatives: " + str(all_trips_alternatives.count())
+	#print "Num Trips: " + str(num_trips)
+	#print "Num Trips with Matched Suggestions: " + str(executed_trips_with_sugestions_matched.count())
+	#print "Num Trips Alternatives: " + str(all_trips_alternatives.count())
 
 	#Clean Memory
 	executed_legs.unpersist(blocking=True)
