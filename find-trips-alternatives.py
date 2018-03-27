@@ -338,7 +338,7 @@ if __name__ == "__main__":
 	print "Total num bus legs:", num_bus_legs, '(', 100*(num_bus_legs/float(total_num_legs)), '%)'
 
 	print "Reading BUSTE data..."
-	bus_trips_data = read_folders(buste_data_folderpath, sqlContext, sc, initial_date, final_date,'_veiculos')
+	bus_trips_data = read_folders(buste_data_folderpath, sqlContext, sc, initial_date, final_date,'')
 	clean_bus_trips_data = clean_buste_data(bus_trips_data)
 
 	print "Finding OTP Bus Legs Actual Start Times in Bus Trips Data..."
@@ -354,7 +354,7 @@ if __name__ == "__main__":
 	clean_bus_trips_data.unpersist(blocking=True)
 
 	print "Reading BUSTE data again..."
-	bus_trips_data2 = read_folders(buste_data_folderpath, sqlContext, sc, initial_date, final_date,'_veiculos')
+	bus_trips_data2 = read_folders(buste_data_folderpath, sqlContext, sc, initial_date, final_date,'')
 	clean_bus_trips_data2 = clean_buste_data(bus_trips_data2)
 
 	print "Finding OTP Bus Legs Actual End Times in Bus Trips Data..."
