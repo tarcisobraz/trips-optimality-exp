@@ -287,8 +287,8 @@ if __name__ == "__main__":
 	print "Preprocessing Data..."
 	od_matrix = advance_od_matrix_start_time(od_matrix,120)
 
-	print "Reducing OD Matrix size to 50 trips for testing purposes..."
-	od_matrix = od_matrix.limit(50)
+	#print "Reducing OD Matrix size to 50 trips for testing purposes..."
+	#od_matrix = od_matrix.limit(50)
 
 	print "Getting OTP suggested itineraries..."
 	otp_suggestions = get_otp_suggested_trips(od_matrix,otp_server_url)
