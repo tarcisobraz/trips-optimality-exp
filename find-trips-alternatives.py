@@ -117,7 +117,7 @@ def get_otp_itineraries(otp_url,o_lat,o_lon,d_lat,d_lon,date,time,verbose=False)
 def get_executed_trip_schedule(otp_url,o_lat,o_lon,d_lat,d_lon,date,time,route,start_stop_id,verbose=False):
     DEF_AGENCY_NAME = 'URBS'
     DEF_AGENCY_ID = 1
-    otp_http_request = 'routers/{}/plan?fromPlace={},{}&toPlace={},{}&mode=TRANSIT,WALK&date={}&time={}&numItineraries=1&preferredRoutes={}_{}&startTransitStopId={}_{}&maxWalkDistance=150&maxTransfers=0'
+    otp_http_request = 'routers/{}/plan?fromPlace={},{}&toPlace={},{}&mode=TRANSIT,WALK&date={}&time={}&numItineraries=1&preferredRoutes={}_{}&startTransitStopId={}_{}&maxWalkingDistance=150&maxTransfers=0'
     
     router_id = get_router_id(date)
     otp_request_url = otp_url + otp_http_request.format(router_id,o_lat,o_lon,d_lat,d_lon,date,time,DEF_AGENCY_NAME,route,DEF_AGENCY_ID,start_stop_id)
@@ -185,6 +185,8 @@ def prepare_otp_legs_df(otp_legs_list):
 
     return otp_legs_df
 
+
+
 #Analysis Functions
 
 def advance_od_matrix_start_time(od_matrix,extra_seconds):
@@ -243,7 +245,7 @@ def clean_otp_legs_actual_time_df(otp_legs_st_end_df):
 
 def combine_otp_suggestions_with_bus_legs_actual_time(otp_suggestions,bus_legs_actual_time):
     return otp_legs_df \
-                .join(clean_otp_legs_actual_time, on=['date','user_trip_id','itinerary_id','leg_id', 'route', 'from_stop_id','to_stop_id'], how='left_outer') \
+                .join(clean_otp_legs_actual_time, on=['date','user_trip_id','itinerary_id','leg_id', 'route', 'from_stop_id','to_stop_id'], how='left') \
                 .withColumn('considered_duration_mins', F.when(F.col('mode') == F.lit('BUS'), F.col('actual_duration_mins')).otherwise(F.col('otp_duration_mins'))) \
                 .withColumn('considered_start_time', F.when(F.col('mode') == F.lit('BUS'), F.col('from_timestamp')).otherwise(F.col('otp_start_time')))
 
@@ -253,6 +255,13 @@ def select_itineraries_fully_identified(otp_itineraries_legs):
                                         .select(['date','user_trip_id','itinerary_id']).distinct()
     itineraries_fully_identified = otp_itineraries_legs.select(['date','user_trip_id','itinerary_id']).subtract(itineraries_not_fully_identified)
     return otp_itineraries_legs.join(itineraries_fully_identified, on=['date','user_trip_id','itinerary_id'], how='inner')
+
+def filter_itineraries_without_bus_legs(otp_itineraries_legs):
+    itineraries_with_bus_legs = otp_itineraries_legs \
+                                    .filter((otp_itineraries_legs.mode == 'BUS')) \
+                                    .select(['date','user_trip_id','itinerary_id']).distinct()
+    return otp_itineraries_legs.join(itineraries_with_bus_legs, on=['date','user_trip_id','itinerary_id'], how='inner')
+
 
 ##########################################################################################################
 
@@ -284,16 +293,24 @@ if __name__ == "__main__":
 
 	print "Reading OD-Matrix Data..."
 	od_matrix_day_folderpath = od_matrix_folderpath + '/' + initial_date.strftime('%Y_%m_%d') + '_od'
-	od_matrix = read_hdfs_folder(sqlContext, od_matrix_day_folderpath) \
-                .withColumnRenamed('date','date_in_secs') \
-                .withColumn('date', F.from_unixtime(F.col('date_in_secs'), 'yyyy-MM-dd')) \
-                .withColumnRenamed('o_boarding_id','user_trip_id')	
+	od_matrix = read_hdfs_folder(sqlContext, od_matrix_day_folderpath)
+
+	print "Fixing OD Matrix dates due to bug on date saving on cluster..."
+	SECONDS_OFFSET = 10800
+	od_matrix = od_matrix \
+                .withColumn('date',F.col('date') + SECONDS_OFFSET) \
+                .withColumn('o_date',F.col('o_date') + SECONDS_OFFSET) \
+                .withColumn('next_o_date',F.col('next_o_date') + SECONDS_OFFSET) \
+                .withColumn('date', F.from_unixtime(F.col('date'), 'yyyy-MM-dd')) \
+                .withColumnRenamed('o_boarding_id','user_trip_id')
 
 	print "Preprocessing Data..."
 	od_matrix = advance_od_matrix_start_time(od_matrix,120)
 
-	#print "Reducing OD Matrix size to 50 trips for testing purposes..."
-	#od_matrix = od_matrix.limit(50)
+	print "Reducing OD Matrix size to 50 trips for testing purposes..."
+	od_matrix = od_matrix.limit(50)
+
+	num_trips = od_matrix.count()
 
 	print "Getting OTP suggested itineraries..."
 	otp_suggestions = get_otp_suggested_trips(od_matrix,otp_server_url)
@@ -305,6 +322,12 @@ if __name__ == "__main__":
 	otp_suggestions = None
 
 	#otp_legs_df = read_hdfs_folder(sqlContext,results_folderpath+'/trip_plans')
+
+	print "Gathering executed trips info..."
+	user_trips_time_info = od_matrix \
+                        .withColumnRenamed('executed_duration','exec_duration_mins') \
+                        .withColumnRenamed('o_datetime','exec_start_time') \
+                        .select(['date','user_trip_id','exec_duration_mins','exec_start_time'])
 
 	print "Getting OTP schedule info for executed trips..."
 	executed_trips_schedule = get_otp_scheduled_trips(od_matrix,otp_server_url)
@@ -326,7 +349,7 @@ if __name__ == "__main__":
                 .withColumnRenamed('otp_duration_mins','planned_duration_mins') \
                 .withColumnRenamed('otp_start_time','planned_start_time')
 
-	print "Total num Trips: " + str(od_matrix.count())
+	print "Total num Trips: " + str(num_trips)
 	print "Num Executed Itineraries with Schedule found: " + str(matched_executed_trips.count())
 
 	total_num_itineraries = otp_legs_df.select('user_trip_id','itinerary_id').distinct().count()
@@ -348,6 +371,7 @@ if __name__ == "__main__":
 	print "Num Bus Legs whose start was found:", num_bus_legs_st, '(', 100*(num_bus_legs_st/float(num_bus_legs)), '%)'
 
 	#Clean memory
+	od_matrix.unpersist(blocking=True)
 	otp_legs_df.unpersist(blocking=True)
 	executed_trips_schedule_df.unpersist(blocking=True)
 	bus_trips_data.unpersist(blocking=True)
@@ -361,6 +385,9 @@ if __name__ == "__main__":
 	otp_legs_start_end = find_otp_bus_legs_actual_end_time(otp_legs_st,clean_bus_trips_data2)
 	clean_otp_legs_actual_time = clean_otp_legs_actual_time_df(otp_legs_start_end)
 
+	num_matched_bus_legs_st = clean_otp_legs_actual_time.count()
+	print "Num Bus Legs whose end was found:", num_matched_bus_legs_st, '(', 100*(num_matched_bus_legs_st/float(num_bus_legs)), '%)'
+
 	#Clean Memory
 	otp_legs_st.unpersist(blocking=True)
 	bus_trips_data2.unpersist(blocking=True)
@@ -373,13 +400,16 @@ if __name__ == "__main__":
 	print "Filtering out itineraries with bus legs not identified in bus data..."
 	clean_legs_actual_time = select_itineraries_fully_identified(all_legs_actual_time)
 
+	print "Filtering out itineraries without bus legs..."
+	clean_legs_actual_time = filter_itineraries_without_bus_legs(clean_legs_actual_time)
+
 	num_itineraries_fully_identified = clean_legs_actual_time.select('user_trip_id','itinerary_id').distinct().count()
 	print "Num Itineraries fully identified in BUSTE data:", num_itineraries_fully_identified, '(', 100*(num_itineraries_fully_identified/float(total_num_itineraries)), '%)'
 	
 	#print "Writing OTP suggested itineraries legs with actual time to file..."
 	#clean_legs_actual_time.write.csv(path=results_folderpath+'/otp_legs_matched',header=True, mode='append')
 
-	#Ciea Memory
+	#Clean Memory
 	clean_otp_legs_actual_time.unpersist(blocking=True)
 	all_legs_actual_time.unpersist(blocking=True)
 	
@@ -390,12 +420,6 @@ if __name__ == "__main__":
                         .agg(F.first('otp_start_time').alias('planned_start_time'), \
                              F.first('considered_start_time').alias('actual_start_time')) \
                         .orderBy(['date','user_trip_id','itinerary_id'])        
-                
-
-	user_trips_time_info = od_matrix \
-                        .withColumnRenamed('executed_duration','exec_duration_mins') \
-                        .withColumnRenamed('o_datetime','exec_start_time') \
-                        .select(['date','user_trip_id','exec_duration_mins','exec_start_time'])
 
 	print "Gathering information from executed itineraries whose schedule was found..."
 
@@ -423,6 +447,7 @@ if __name__ == "__main__":
                                             .drop_duplicates()
 
 	#Clean Memory
+	matched_executed_trips.unpersist(blocking=True)
 	clean_legs_actual_time.unpersist(blocking=True)
 	first_boarding_time.unpersist(blocking=True)
 	user_trips_time_info.unpersist(blocking=True)
@@ -434,7 +459,7 @@ if __name__ == "__main__":
                 .join(executed_trips_with_sugestions_matched, on='user_trip_id',how='inner') \
                 .orderBy(['date','user_trip_id','itinerary_id'])
 
-	print "Num Trips: " + str(od_matrix.count())
+	print "Num Trips: " + str(num_trips)
 	print "Num Trips with Matched Suggestions: " + str(executed_trips_with_sugestions_matched.count())
 	print "Num Trips Alternatives: " + str(all_trips_alternatives.count())
 
