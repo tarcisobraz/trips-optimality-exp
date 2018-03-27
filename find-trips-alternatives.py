@@ -94,27 +94,32 @@ def get_timestamp_in_tz(unixtime_timestamp,ts_format,tz):
 
 #OTP Functions
 
+def get_router_id(query_date):
+    INTERMEDIATE_OTP_DATE = datetime.strptime("2017-06-30", "%Y-%m-%d")
+    
+    router_id = ''
+    date_timestamp = datetime.strptime(query_date, "%Y-%m-%d")   
+    
+    if (date_timestamp <= INTERMEDIATE_OTP_DATE):
+        return 'ctba-2017-1'
+    else:
+        return 'ctba-2017-2'
+
 def get_otp_itineraries(otp_url,o_lat,o_lon,d_lat,d_lon,date,time,verbose=False):
-    otp_http_request = 'routers/ctba/plan?fromPlace={},{}&toPlace={},{}&mode=TRANSIT,WALK&date={}&time={}'
-    otp_request_url = otp_url + otp_http_request.format(o_lat,o_lon,d_lat,d_lon,date,time)
+    otp_http_request = 'routers/{}/plan?fromPlace={},{}&toPlace={},{}&mode=TRANSIT,WALK&date={}&time={}'
+	
+    router_id = get_router_id(date)
+    otp_request_url = otp_url + otp_http_request.format(router_id,o_lat,o_lon,d_lat,d_lon,date,time)
     if verbose:
         print otp_request_url
     return json.loads(urllib2.urlopen(otp_request_url).read())
 
 def get_executed_trip_schedule(otp_url,o_lat,o_lon,d_lat,d_lon,date,time,route,start_stop_id,verbose=False):
-    INTERMEDIATE_OTP_DATE = datetime.strptime("2017-06-30", "%Y-%m-%d")
     DEF_AGENCY_NAME = 'URBS'
     DEF_AGENCY_ID = 1
-    
-    router_id = ''
-    date_timestamp = datetime.strptime(date, "%Y-%m-%d")   
-    
-    if (date_timestamp <= INTERMEDIATE_OTP_DATE):
-        router_id = 'ctba-2017-1'
-    else:
-        router_id = 'ctba-2017-2'
-
     otp_http_request = 'routers/{}/plan?fromPlace={},{}&toPlace={},{}&mode=TRANSIT,WALK&date={}&time={}&numItineraries=1&preferredRoutes={}_{}&startTransitStopId={}_{}&maxWalkDistance=150&maxTransfers=0'
+    
+    router_id = get_router_id(date)
     otp_request_url = otp_url + otp_http_request.format(router_id,o_lat,o_lon,d_lat,d_lon,date,time,DEF_AGENCY_NAME,route,DEF_AGENCY_ID,start_stop_id)
     if verbose:
         print otp_request_url
