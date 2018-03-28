@@ -21,7 +21,7 @@ else
 		#date=${filename%_*}  # will drop part of string from last occur of `SubStr` to the end
 		formatted_date=${filename//_/-}
 			echo "Processing date $formatted_date ..."
-		time spark-submit $script_path $formatted_date $od_matrix_folderpath $buste_data_folderpath $otp_server_url $results_folderpath
+		time python $script_path $formatted_date $od_matrix_folderpath $buste_data_folderpath $otp_server_url $results_folderpath
 	 
 	done
 
