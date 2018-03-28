@@ -223,7 +223,7 @@ if __name__ == "__main__":
 	start_time = time.time()
 	print "Reading OD-Matrix Data..."
 	od_matrix_day_folderpath = od_matrix_folderpath + os.sep + file_date.strftime('%Y_%m_%d') + '_od'
-	od_matrix = pd.read_csv(od_matrix_day_folderpath + os.sep + file_date.strftime('%Y_%m_%d') + '_od_matrix.csv')
+	od_matrix = pd.read_csv(od_matrix_day_folderpath + os.sep + file_date.strftime('%Y_%m_%d') + '_od_od_matrix.csv')
 
 	print "Fixing OD Matrix dates due to bug on date saving on cluster..."
 	SECONDS_OFFSET = 10800

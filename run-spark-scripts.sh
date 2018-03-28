@@ -4,13 +4,13 @@
 if [ "$#" -lt 5 ]; then
     echo "Wrong number of parameters"
 	echo "Usage:"
-	echo "./run-spark-scripts.sh <script_path> <buste_data_folderpath> <od_matrix_folderpath> <otp_server_url> <results_folderpath>"
+	echo "./run-spark-scripts.sh <script_path> <od_matrix_folderpath> <buste_data_folderpath>  <otp_server_url> <results_folderpath>"
 
 else
 
 	script_path=$1
-	buste_data_folderpath=$2
-	od_matrix_folderpath=$3
+	od_matrix_folderpath=$2
+	buste_data_folderpath=$3
 	otp_server_url=$4
 	results_folderpath=$5
 
@@ -21,7 +21,7 @@ else
 		#date=${filename%_*}  # will drop part of string from last occur of `SubStr` to the end
 		formatted_date=${filename//_/-}
 			echo "Processing date $formatted_date ..."
-		time spark-submit --driver-memory 4g $script_path $formatted_date $formatted_date $od_matrix_folderpath $buste_data_folderpath $otp_server_url $results_folderpath
+		time spark-submit $script_path $formatted_date $od_matrix_folderpath $buste_data_folderpath $otp_server_url $results_folderpath
 	 
 	done
 
