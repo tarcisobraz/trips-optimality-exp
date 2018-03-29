@@ -98,8 +98,8 @@ def extract_otp_trips_legs(otp_trips):
                     route = leg['route'] if leg['route'] != '' else None
                     fromStopId = leg['from']['stopId'].split(':')[1] if leg['mode'] == 'BUS' else None
                     toStopId = leg['to']['stopId'].split(':')[1] if leg['mode'] == 'BUS' else None
-                    start_time = long(leg['startTime'])/1000
-                    end_time = long(leg['endTime'])/1000
+                    start_time = long(leg['startTime'] + leg['agencyTimeZoneOffset'])/1000
+                    end_time = long(leg['endTime'] + leg['agencyTimeZoneOffset'])/1000
                     duration = (end_time - start_time)/60
                     trips_legs.append((date,trip,itinerary_id,leg_id,start_time,end_time,leg['mode'],route,fromStopId,toStopId, duration))
                     leg_id += 1
@@ -243,7 +243,9 @@ if __name__ == "__main__":
 
 	print "Extracting OTP Legs info..."
 	otp_legs_df = prepare_otp_legs_df(extract_otp_trips_legs(otp_suggestions))
-	#otp_legs_df.to_csv(results_folderpath+'/trip_plans',index=False)
+
+	print "Writing OTP suggestions to file..."
+	otp_legs_df.to_csv(results_folderpath + os.sep + file_date.strftime('%Y_%m_%d') + '_otp_suggestions.csv',index=False)
 
 	otp_suggestions = None
 
